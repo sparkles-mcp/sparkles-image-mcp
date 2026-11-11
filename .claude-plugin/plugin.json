@@ -1,0 +1,15 @@
+{
+  "name": "sparkles-image",
+  "version": "0.1.0",
+  "description": "Generate images and GIFs with a Sparkles Editor account from any MCP client.",
+  "author": {
+    "name": "Sparkles Editor contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "image-generation",
+    "sparkles"
+  ]
+}

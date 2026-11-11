@@ -1,0 +1,35 @@
+{
+  "name": "sparkles-image-mcp",
+  "version": "0.1.0",
+  "description": "Open-source Model Context Protocol server for generating images with a Sparkles Editor account.",
+  "type": "module",
+  "bin": {
+    "sparkles-image-mcp": "./src/cli.mjs"
+  },
+  "files": [
+    "src",
+    "skills",
+    ".claude-plugin",
+    ".mcp.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/cli.mjs serve",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "3.25.76"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "image-generation",
+    "sparkles"
+  ],
+  "license": "MIT"
+}
