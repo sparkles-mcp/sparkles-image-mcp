@@ -87,6 +87,61 @@ test('generate_image marks a failed job as an error', async () => {
   assert.match(result.content[0].text, /provider_error/)
 })
 
+test('tool errors do not attach output-schema-invalid structured content', async () => {
+  const handlers = setup(completedClient({
+    generate: async () => {
+      throw new AuthError('Login required.', 'login_required')
+    }
+  }))
+  const result = await handlers.get('generate_image').handler({ prompt: 'A red fox in snow' }, {})
+  assert.equal(result.isError, true)
+  assert.equal('structuredContent' in result, false)
+})
+
+test('generate_image accepts UUIDv7 request ids', async () => {
+  let received
+  const handlers = setup(completedClient({
+    generate: async (input) => {
+      received = input
+      return { ids: [JOB_ID], model: 'gpt-image-2.6-sunburst', quality: 'auto', format: 'png', count: 1, requestId: input.requestId }
+    }
+  }))
+  const requestId = '0190a5b0-7c3e-7abc-8def-0123456789ab'
+  const result = await handlers.get('generate_image').handler({ prompt: 'A red fox in snow', request_id: requestId }, {})
+  assert.equal(result.isError, undefined)
+  assert.equal(received.requestId, requestId)
+  assert.equal(result.structuredContent.requestId, requestId)
+})
+
+test('generate_image rejects an invalid pixel size before submitting', async () => {
+  let submitted = false
+  const handlers = setup(completedClient({
+    generate: async () => {
+      submitted = true
+      throw new Error('should not submit')
+    }
+  }))
+  const result = await handlers.get('generate_image').handler({ prompt: 'A red fox in snow', size: '1920x1080' }, {})
+  assert.equal(result.isError, true)
+  assert.match(result.content[0].text, /Invalid size/)
+  assert.equal(submitted, false)
+})
+
+test('generate_image keeps the combined image payload under the transport limit', async () => {
+  const big = Buffer.alloc(2_200_000, 7)
+  const ids = [JOB_ID, JOB_ID_2, '33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444']
+  const handlers = setup(completedClient({
+    generate: async () => ({ ids, model: 'gpt-image-2.6-sunburst', quality: 'auto', format: 'png', count: 4, requestId: JOB_ID }),
+    statuses: async (requested) => ({ jobs: requested.map((id) => ({ id, status: 'completed', model: 'gpt-image-2.6-sunburst' })) }),
+    image: async () => ({ data: big.toString('base64'), mimeType: 'image/png', bytes: big.length, original: true })
+  }))
+  const result = await handlers.get('generate_image').handler({ prompt: 'Four large images', count: 4, wait_seconds: 0 }, {})
+  assert.equal(result.isError, undefined)
+  assert.equal(result.structuredContent.images.length, 2)
+  assert.match(result.structuredContent.note, /get_image/)
+  assert.equal(result.content.filter((entry) => entry.type === 'image').length, 2)
+})
+
 test('generate_image errors when the created job cannot be found', async () => {
   const client = completedClient({
     statuses: async () => ({ jobs: [] })
@@ -170,7 +225,7 @@ test('credit tools map the wallet and usage fields', async () => {
   assert.equal(usage.structuredContent.entries[0].id, '9')
 })
 
-test('credit tools convert NewAPI quota into display credits', async () => {
+test('credit tools convert billing units into display credits', async () => {
   const handlers = setup(completedClient({
     wallet: async () => ({
       balance: 160008437,

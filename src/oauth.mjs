@@ -1,8 +1,9 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
-import { accessHeaders, endpoints } from './config.mjs'
-import { clearCredentials, saveCredentials } from './store.mjs'
+import { CLI, accessHeaders, endpoints } from './config.mjs'
+import { clearCredentials, loadCredentials, saveCredentials, withCredentialsLock } from './store.mjs'
+import { readCapped } from './read.mjs'
 
 export class AuthError extends Error {
   constructor(message, code = 'login_required') {
@@ -21,12 +22,15 @@ export class OAuthError extends Error {
 }
 
 const redirectStatuses = new Set([301, 302, 303, 307, 308])
+const MAX_OAUTH_BYTES = 512 * 1024
 
 async function siteFetch(cfg, url, options = {}, timeout = 15000) {
+  const timer = AbortSignal.timeout(timeout)
+  const signal = options.signal ? AbortSignal.any([options.signal, timer]) : timer
   const response = await fetch(url, {
     ...options,
     redirect: 'manual',
-    signal: AbortSignal.timeout(timeout)
+    signal
   })
   if (redirectStatuses.has(response.status)) {
     await response.body?.cancel()
@@ -48,8 +52,9 @@ export function pkce() {
 
 export const randomState = () => crypto.randomBytes(32).toString('base64url')
 
-export async function discover(cfg) {
+export async function discover(cfg, { signal } = {}) {
   const fallback = {
+    issuer: cfg.issuer,
     authorization_endpoint: endpoints(cfg).authorization,
     token_endpoint: endpoints(cfg).token,
     revocation_endpoint: endpoints(cfg).revoke
@@ -57,14 +62,29 @@ export async function discover(cfg) {
   let data
   try {
     const response = await siteFetch(cfg, endpoints(cfg).metadata, {
-      headers: { Accept: 'application/json', ...accessHeaders(cfg) }
+      headers: { Accept: 'application/json', ...accessHeaders(cfg) },
+      signal
     }, 10000)
-    if (response.ok) data = await response.json()
-    else await response.body?.cancel()
+    if (response.ok) {
+      const { buffer, tooLarge } = await readCapped(response, MAX_OAUTH_BYTES)
+      if (!tooLarge) {
+        try {
+          data = JSON.parse(buffer.toString('utf8'))
+        } catch {
+          data = null
+        }
+      }
+    } else {
+      await response.body?.cancel()
+    }
   } catch (error) {
+    if (signal?.aborted)
+      throw new AuthError('The call was cancelled.', 'cancelled')
     if (error instanceof AuthError && error.code === 'access_blocked') throw error
   }
   if (!data?.authorization_endpoint || !data?.token_endpoint) return fallback
+  if (data.issuer && data.issuer !== cfg.issuer)
+    throw new AuthError('The authorization server metadata names an unexpected issuer.', 'invalid_metadata')
   const origin = new URL(cfg.issuer).origin
   for (const endpoint of [data.authorization_endpoint, data.token_endpoint, data.revocation_endpoint]) {
     if (endpoint && new URL(endpoint).origin !== origin)
@@ -73,7 +93,7 @@ export async function discover(cfg) {
   return { ...fallback, ...data }
 }
 
-export function startCallbackServer(state) {
+export function startCallbackServer(state, { issuer, requireIssuer = false, signal } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false
     let timer
@@ -83,10 +103,17 @@ export function startCallbackServer(state) {
       settleResolve = done
       settleReject = fail
     })
+    // The listener error path may settle this before login() awaits it.
+    result.catch(() => {})
+    const onAbort = () => {
+      stop(new AuthError('The call was cancelled.', 'cancelled'))
+      server.close()
+    }
     const stop = (error) => {
       if (settled) return false
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       if (error) settleReject(error)
       return true
     }
@@ -102,6 +129,13 @@ export function startCallbackServer(state) {
       }
       if (url.searchParams.get('state') !== state) {
         response.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid state')
+        return
+      }
+      const returnedIssuer = url.searchParams.get('iss')
+      if (issuer && (requireIssuer || returnedIssuer) && returnedIssuer !== issuer) {
+        response.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid issuer')
+        stop(new OAuthError('The authorization response came from an unexpected issuer.', 'invalid_issuer'))
+        server.close()
         return
       }
       const finish = (message, status) => {
@@ -137,6 +171,12 @@ export function startCallbackServer(state) {
       stop(error)
       server.close()
     })
+    if (signal?.aborted) {
+      server.close()
+      reject(new AuthError('The call was cancelled.', 'cancelled'))
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     server.listen(0, '127.0.0.1', () => {
       const address = server.address()
       if (!address || typeof address === 'string') {
@@ -146,7 +186,7 @@ export function startCallbackServer(state) {
       }
       const redirectUri = `http://127.0.0.1:${address.port}/callback`
       timer = setTimeout(() => {
-        if (!stop(new AuthError('Login timed out. Run `npx sparkles-image-mcp login` again.', 'login_timeout')))
+        if (!stop(new AuthError(`Login timed out. Run \`${CLI} login\` again.`, 'login_timeout')))
           return
         server.close()
       }, 5 * 60 * 1000)
@@ -167,33 +207,52 @@ export function openUrl(url) {
   const [command, args] = process.platform === 'darwin'
     ? ['open', [url]]
     : process.platform === 'win32'
-      ? ['cmd', ['/c', 'start', '', url]]
+      // Avoid cmd.exe, which reparses '&' in the authorization URL.
+      ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
       : ['xdg-open', [url]]
-  try {
-    const child = spawn(command, args, { stdio: 'ignore', detached: true })
-    child.on('error', () => {})
-    child.unref()
-    return true
-  } catch {
-    return false
-  }
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(command, args, { stdio: 'ignore', detached: true })
+    } catch {
+      resolve(false)
+      return
+    }
+    let settled = false
+    child.once('error', () => {
+      if (settled) return
+      settled = true
+      resolve(false)
+    })
+    child.once('spawn', () => {
+      if (settled) return
+      settled = true
+      child.unref()
+      resolve(true)
+    })
+  })
 }
 
-async function postToken(cfg, body) {
-  const response = await siteFetch(cfg, endpoints(cfg).token, {
+async function postToken(cfg, body, { signal, metadata } = {}) {
+  const endpoint = metadata?.token_endpoint || endpoints(cfg).token
+  const response = await siteFetch(cfg, endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
       ...accessHeaders(cfg)
     },
-    body: body.toString()
+    body: body.toString(),
+    signal
   })
-  let data
-  try {
-    data = await response.json()
-  } catch {
-    data = null
+  const { buffer, tooLarge } = await readCapped(response, MAX_OAUTH_BYTES)
+  let data = null
+  if (!tooLarge) {
+    try {
+      data = JSON.parse(buffer.toString('utf8'))
+    } catch {
+      data = null
+    }
   }
   if (!response.ok || !data?.access_token) {
     throw new OAuthError(
@@ -204,7 +263,7 @@ async function postToken(cfg, body) {
   return data
 }
 
-const credentialsFrom = (cfg, data, previous = {}) => ({
+const credentialsFrom = (cfg, data, previous = {}, metadata) => ({
   version: 1,
   issuer: cfg.issuer,
   clientId: cfg.clientId,
@@ -212,14 +271,20 @@ const credentialsFrom = (cfg, data, previous = {}) => ({
   refreshToken: data.refresh_token || previous.refreshToken || '',
   expiresAt: Date.now() + (Number(data.expires_in) || 900) * 1000,
   scope: data.scope || previous.scope || cfg.scope,
-  createdAt: previous.createdAt || Date.now()
+  createdAt: previous.createdAt || Date.now(),
+  tokenEndpoint: metadata?.token_endpoint || previous.tokenEndpoint,
+  revocationEndpoint: metadata?.revocation_endpoint || previous.revocationEndpoint
 })
 
-export async function login(cfg, { openBrowser = true, log = console.log } = {}) {
-  const metadata = await discover(cfg)
+export async function login(cfg, { openBrowser = true, log = console.log, signal } = {}) {
+  const metadata = await discover(cfg, { signal })
   const { verifier, challenge } = pkce()
   const state = randomState()
-  const callback = await startCallbackServer(state)
+  const callback = await startCallbackServer(state, {
+    issuer: metadata.issuer || cfg.issuer,
+    requireIssuer: metadata.authorization_response_iss_parameter_supported === true,
+    signal
+  })
   try {
     const url = new URL(metadata.authorization_endpoint)
     url.searchParams.set('response_type', 'code')
@@ -231,7 +296,7 @@ export async function login(cfg, { openBrowser = true, log = console.log } = {})
     url.searchParams.set('code_challenge_method', 'S256')
     url.searchParams.set('resource', cfg.resource)
     log('Opening the Sparkles authorization page...')
-    if (!openBrowser || !openUrl(url.toString()))
+    if (!openBrowser || !(await openUrl(url.toString())))
       log(`Open this URL to continue:\n${url.toString()}`)
     log('Waiting for authorization...')
     const result = await callback.wait
@@ -243,8 +308,8 @@ export async function login(cfg, { openBrowser = true, log = console.log } = {})
       redirect_uri: callback.redirectUri,
       code_verifier: verifier,
       resource: cfg.resource
-    }))
-    const credentials = credentialsFrom(cfg, data)
+    }), { signal, metadata })
+    const credentials = credentialsFrom(cfg, data, {}, metadata)
     saveCredentials(cfg, credentials)
     return credentials
   } finally {
@@ -252,54 +317,72 @@ export async function login(cfg, { openBrowser = true, log = console.log } = {})
   }
 }
 
-export async function refresh(cfg, credentials) {
+export async function refresh(cfg, credentials, { signal } = {}) {
   if (!credentials.refreshToken)
-    throw new AuthError('Login required. Run `npx sparkles-image-mcp login`.', 'login_required')
-  let data
-  try {
-    data = await postToken(cfg, new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: cfg.clientId,
-      refresh_token: credentials.refreshToken,
-      resource: cfg.resource
-    }))
-  } catch (error) {
-    if (error instanceof OAuthError && error.code === 'invalid_grant') {
-      clearCredentials(cfg)
-      throw new AuthError('The Sparkles login has expired. Run `npx sparkles-image-mcp login` again.', 'login_expired')
+    throw new AuthError(`Login required. Run \`${CLI} login\`.`, 'login_required')
+  return withCredentialsLock(cfg, async () => {
+    const stored = loadCredentials(cfg)
+    // Another process may have rotated the token while we waited for the lock.
+    if (stored?.refreshToken && stored.refreshToken !== credentials.refreshToken)
+      return stored
+    const metadata = await discover(cfg, { signal })
+    let data
+    try {
+      data = await postToken(cfg, new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: cfg.clientId,
+        refresh_token: credentials.refreshToken,
+        resource: cfg.resource
+      }), { signal, metadata })
+    } catch (error) {
+      if (error instanceof OAuthError && error.code === 'invalid_grant') {
+        const latest = loadCredentials(cfg)
+        if (latest?.refreshToken && latest.refreshToken !== credentials.refreshToken)
+          return latest
+        clearCredentials(cfg)
+        throw new AuthError(`The Sparkles login has expired. Run \`${CLI} login\` again.`, 'login_expired')
+      }
+      throw error
     }
-    throw error
-  }
-  const next = credentialsFrom(cfg, data, credentials)
-  saveCredentials(cfg, next)
-  return next
+    const next = credentialsFrom(cfg, data, stored || credentials, metadata)
+    saveCredentials(cfg, next)
+    return next
+  })
 }
 
-export async function currentAccessToken(cfg, credentials, { force = false } = {}) {
+export async function currentAccessToken(cfg, credentials, { force = false, signal } = {}) {
   if (!force && credentials.accessToken && credentials.expiresAt > Date.now() + 60_000)
     return credentials
-  return refresh(cfg, credentials)
+  return refresh(cfg, credentials, { signal })
 }
 
-export async function revoke(cfg, credentials) {
-  if (credentials?.refreshToken) {
+export async function revoke(cfg, credentials, { signal } = {}) {
+  let revoked = false
+  let error
+  const token = credentials?.refreshToken || credentials?.accessToken
+  const tokenTypeHint = credentials?.refreshToken ? 'refresh_token' : 'access_token'
+  if (token) {
     try {
-      const response = await siteFetch(cfg, endpoints(cfg).revoke, {
+      const response = await siteFetch(cfg, credentials?.revocationEndpoint || endpoints(cfg).revoke, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           ...accessHeaders(cfg)
         },
         body: new URLSearchParams({
-          token: credentials.refreshToken,
-          token_type_hint: 'refresh_token',
+          token,
+          token_type_hint: tokenTypeHint,
           client_id: cfg.clientId
-        }).toString()
-      })
+        }).toString(),
+        signal
+      }, 10000)
       await response.body?.cancel()
-    } catch {
-      // Local logout must still succeed when the network is unavailable.
+      revoked = response.ok
+      if (!response.ok) error = `The site returned HTTP ${response.status}.`
+    } catch (caught) {
+      error = caught?.message || 'The site could not be reached.'
     }
   }
   clearCredentials(cfg)
+  return { revoked, error }
 }

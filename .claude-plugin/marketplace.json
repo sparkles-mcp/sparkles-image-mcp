@@ -1,0 +1,17 @@
+{
+  "name": "sparkles-image-mcp",
+  "description": "Sparkles Editor image generation MCP server",
+  "owner": { "name": "Sparkles Editor contributors" },
+  "plugins": [
+    {
+      "name": "sparkles-image",
+      "source": "./",
+      "description": "Generate images and GIFs with a Sparkles Editor account from any MCP client.",
+      "author": { "name": "Sparkles Editor contributors" },
+      "homepage": "https://sparkles-editor.com/mcp",
+      "repository": "https://github.com/sparkles-mcp/sparkles-image-mcp",
+      "license": "MIT",
+      "keywords": ["mcp", "image-generation", "gif", "sparkles"]
+    }
+  ]
+}

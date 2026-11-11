@@ -83,6 +83,8 @@ test('refresh rotates the refresh token and persists the new credentials', async
   try {
     const before = {
       version: 1,
+      issuer: cfg.issuer,
+      clientId: cfg.clientId,
       accessToken: 'token-1',
       refreshToken: 'r1',
       expiresAt: Date.now() + 3600_000,
@@ -109,6 +111,8 @@ test('an invalid refresh token clears local credentials', async () => {
   try {
     const before = {
       version: 1,
+      issuer: cfg.issuer,
+      clientId: cfg.clientId,
       accessToken: 'token-1',
       refreshToken: 'old',
       expiresAt: Date.now() + 3600_000,
@@ -192,11 +196,152 @@ test('login completes authorization code + PKCE and stores the credentials', asy
   }
 })
 
+test('the local callback rejects a mismatched RFC 9207 issuer', async () => {
+  const callback = await startCallbackServer('state-3', {
+    issuer: 'https://sparkles-editor.com',
+    requireIssuer: true
+  })
+  try {
+    const rejected = await fetch(`${callback.redirectUri}?code=abc&state=state-3&iss=${encodeURIComponent('https://evil.example')}`)
+    assert.equal(rejected.status, 400)
+    await assert.rejects(callback.wait, (error) => {
+      assert.equal(error.code, 'invalid_issuer')
+      return true
+    })
+  } finally {
+    callback.close()
+  }
+})
+
+test('the local callback accepts the expected RFC 9207 issuer', async () => {
+  const issuer = 'https://sparkles-editor.com'
+  const callback = await startCallbackServer('state-4', { issuer, requireIssuer: true })
+  try {
+    const response = await fetch(`${callback.redirectUri}?code=abc&state=state-4&iss=${encodeURIComponent(issuer)}`)
+    assert.equal(response.status, 200)
+    const result = await callback.wait
+    assert.equal(result.searchParams.get('code'), 'abc')
+  } finally {
+    callback.close()
+  }
+})
+
+test('refresh reuses a newer token another process already saved', async () => {
+  const server = await startFakeServer()
+  const directory = tempDir()
+  const cfg = cfgFor(server.origin, directory)
+  try {
+    const current = {
+      version: 1,
+      issuer: cfg.issuer,
+      clientId: cfg.clientId,
+      accessToken: 'new-access',
+      refreshToken: 'r2',
+      expiresAt: Date.now() + 3600_000,
+      scope: 'images:read'
+    }
+    saveCredentials(cfg, current)
+    const stale = { ...current, accessToken: 'old-access', refreshToken: 'r1' }
+    const result = await refresh(cfg, stale)
+    assert.equal(result.accessToken, 'new-access')
+    assert.equal(result.refreshToken, 'r2')
+    assert.equal(server.state.requests.filter((request) => request.path === '/api/oauth/token').length, 0)
+  } finally {
+    await server.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('discover rejects metadata that names another issuer or origin', async () => {
+  const server = await startFakeServer({
+    metadata: {
+      issuer: 'https://evil.example',
+      authorization_endpoint: 'https://evil.example/oauth/authorize',
+      token_endpoint: 'https://evil.example/api/oauth/token'
+    }
+  })
+  const directory = tempDir()
+  try {
+    await assert.rejects(discover(cfgFor(server.origin, directory)), (error) => {
+      assert.ok(error instanceof AuthError)
+      assert.equal(error.code, 'invalid_metadata')
+      return true
+    })
+  } finally {
+    await server.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('refresh uses the token endpoint advertised in metadata', async () => {
+  const server = await startFakeServer({
+    metadata: {
+      issuer: null,
+      authorization_endpoint: null,
+      token_endpoint: null,
+      revocation_endpoint: null
+    }
+  })
+  // The fake server needs the actual origin, so replace the placeholders.
+  server.state.metadata = {
+    issuer: server.origin,
+    authorization_endpoint: `${server.origin}/oauth/authorize`,
+    token_endpoint: `${server.origin}/custom/token`,
+    revocation_endpoint: `${server.origin}/custom/revoke`
+  }
+  const directory = tempDir()
+  const cfg = cfgFor(server.origin, directory)
+  try {
+    const before = {
+      version: 1,
+      issuer: cfg.issuer,
+      clientId: cfg.clientId,
+      accessToken: 'token-1',
+      refreshToken: 'r1',
+      expiresAt: Date.now() + 3600_000,
+      scope: 'images:read'
+    }
+    saveCredentials(cfg, before)
+    const after = await refresh(cfg, before)
+    assert.equal(after.accessToken, 'refreshed-token')
+    assert.equal(server.state.requests.filter((request) => request.path === '/custom/token').length, 1)
+  } finally {
+    await server.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('revoke reports a failed server-side revocation', async () => {
+  const server = await startFakeServer({ revokeStatus: 500 })
+  const directory = tempDir()
+  const cfg = cfgFor(server.origin, directory)
+  try {
+    const credentials = {
+      version: 1,
+      issuer: cfg.issuer,
+      clientId: cfg.clientId,
+      accessToken: 'token-1',
+      refreshToken: 'r1',
+      expiresAt: Date.now() + 3600_000
+    }
+    saveCredentials(cfg, credentials)
+    const result = await revoke(cfg, credentials)
+    assert.equal(result.revoked, false)
+    assert.match(result.error, /HTTP 500/)
+    assert.equal(fs.existsSync(credentialsFile(cfg)), false)
+  } finally {
+    await server.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test('revoke clears local credentials even when the site is unreachable', async () => {
   const directory = tempDir()
   const cfg = cfgFor('http://127.0.0.1:1', directory)
   const credentials = {
     version: 1,
+    issuer: cfg.issuer,
+    clientId: cfg.clientId,
     accessToken: 'token-1',
     refreshToken: 'r1',
     expiresAt: Date.now() + 3600_000

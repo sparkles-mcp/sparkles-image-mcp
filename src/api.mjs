@@ -1,8 +1,11 @@
 import crypto from 'node:crypto'
-import { accessHeaders } from './config.mjs'
+import { CLI, accessHeaders } from './config.mjs'
 import { AuthError, currentAccessToken } from './oauth.mjs'
+import { readCapped } from './read.mjs'
 
-export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+// A single stdio JSON-RPC message is capped at 10 MiB by the MCP SDK. Base64
+// grows binary data by 4/3, so leave headroom for JSON and multiple blocks.
+export const MAX_IMAGE_BYTES = 6 * 1024 * 1024
 const MAX_JSON_BYTES = 2 * 1024 * 1024
 const MAX_ERROR_BYTES = 64 * 1024
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
@@ -17,37 +20,17 @@ export class ApiError extends Error {
   }
 }
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+// Accept every RFC 9562 UUID version with a valid RFC variant. The gateway
+// accepts UUIDv7, so the client must not restrict ids to version 4.
+export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-export const isUuid = (value) => typeof value === 'string' && uuidPattern.test(value)
+export const isUuid = (value) => typeof value === 'string' && UUID_PATTERN.test(value)
 
 export const newRequestId = () => crypto.randomUUID()
 
-async function readCapped(response, max) {
-  const length = Number(response.headers.get('content-length') || 0)
-  if (length > max) {
-    await response.body?.cancel()
-    return { tooLarge: true, buffer: null }
-  }
-  if (!response.body) return { tooLarge: false, buffer: Buffer.alloc(0) }
-  const reader = response.body.getReader()
-  const chunks = []
-  let size = 0
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      size += value.length
-      if (size > max) {
-        await reader.cancel()
-        return { tooLarge: true, buffer: null }
-      }
-      chunks.push(Buffer.from(value))
-    }
-  } finally {
-    reader.releaseLock()
-  }
-  return { tooLarge: false, buffer: Buffer.concat(chunks) }
+const timeoutSignal = (signal, timeout) => {
+  const timer = AbortSignal.timeout(timeout)
+  return signal ? AbortSignal.any([signal, timer]) : timer
 }
 
 async function errorMessage(response) {
@@ -73,13 +56,13 @@ export class ApiClient {
     this.refreshInFlight = null
   }
 
-  async token(force = false) {
+  async token(force = false, { signal } = {}) {
     const valid = this.credentials.accessToken && this.credentials.expiresAt > Date.now() + 60_000
     if (!force && valid) return this.credentials.accessToken
     // Refresh tokens rotate. Concurrent tool calls must share one refresh or
     // the server's reuse detection will revoke the whole grant.
     if (!this.refreshInFlight) {
-      this.refreshInFlight = currentAccessToken(this.cfg, this.credentials, { force })
+      this.refreshInFlight = currentAccessToken(this.cfg, this.credentials, { force, signal })
         .finally(() => {
           this.refreshInFlight = null
         })
@@ -104,7 +87,8 @@ export class ApiClient {
     body,
     accept = 'application/json',
     timeout = 30000,
-    retry = true
+    retry = true,
+    signal
   } = {}) {
     const url = this.url(path, query)
     const headers = {
@@ -120,9 +104,11 @@ export class ApiClient {
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: 'manual',
-        signal: AbortSignal.timeout(timeout)
+        signal: timeoutSignal(signal, timeout)
       })
     } catch (error) {
+      if (signal?.aborted)
+        throw new ApiError('The call was cancelled.', { code: 'cancelled' })
       throw new ApiError(
         error?.name === 'TimeoutError'
           ? 'Sparkles did not answer in time. The request may still be processing.'
@@ -140,9 +126,9 @@ export class ApiClient {
     if (response.status === 401 && retry) {
       await response.body?.cancel()
       if (!this.credentials.refreshToken)
-        throw new AuthError('Login required. Run `npx sparkles-image-mcp login`.', 'login_required')
-      await this.token(true)
-      return this.fetchResponse(path, { method, query, body, accept, timeout, retry: false })
+        throw new AuthError(`Login required. Run \`${CLI} login\`.`, 'login_required')
+      await this.token(true, { signal })
+      return this.fetchResponse(path, { method, query, body, accept, timeout, retry: false, signal })
     }
     if (response.ok) return response
     const message = await errorMessage(response)
@@ -180,12 +166,13 @@ export class ApiClient {
     }
   }
 
-  catalog() {
-    return this.json('images/catalog')
+  catalog({ signal } = {}) {
+    return this.json('images/catalog', { signal })
   }
 
-  async generate(input) {
-    const catalog = await this.catalog()
+  async generate(input, { signal } = {}) {
+    signal?.throwIfAborted()
+    const catalog = await this.catalog({ signal })
     if (!catalog?.ready) throw new ApiError('Image generation is not available right now.', { code: 'unavailable' })
     const prices = Array.isArray(catalog.prices) ? catalog.prices : []
     if (!prices.length) throw new ApiError('No image models are currently available.', { code: 'unavailable' })
@@ -218,7 +205,8 @@ export class ApiClient {
       if (input.frameDurationMs) body.frameDurationMs = input.frameDurationMs
     }
     if (input.styleId) body.styleId = input.styleId
-    const result = await this.json('images/jobs', { method: 'POST', body })
+    signal?.throwIfAborted()
+    const result = await this.json('images/jobs', { method: 'POST', body, signal })
     if (!result?.id) throw new ApiError('Sparkles did not return an image job.', { code: 'invalid_response' })
     return {
       id: result.id,
@@ -226,46 +214,50 @@ export class ApiClient {
       model,
       quality,
       format,
-      count: body.count
+      count: body.count,
+      requestId: body.requestId
     }
   }
 
-  job(id) {
+  job(id, { signal } = {}) {
     if (!isUuid(id)) throw new ApiError('Invalid image job id.', { code: 'invalid_request' })
-    return this.json(`images/jobs/${id}`)
+    return this.json(`images/jobs/${id}`, { signal })
   }
 
-  async statuses(ids) {
+  async statuses(ids, { signal } = {}) {
     const unique = [...new Set(ids)].filter(isUuid)
     if (!unique.length) throw new ApiError('No valid image job ids were provided.', { code: 'invalid_request' })
     return this.json('images/jobs/status', {
       method: 'POST',
-      body: { ids: unique.slice(0, 50) }
+      body: { ids: unique.slice(0, 50) },
+      signal
     })
   }
 
-  listJobs({ limit = 20, saved = false, view = 'all', cursor } = {}) {
+  listJobs({ limit = 20, saved = false, view = 'all', cursor, signal } = {}) {
     return this.json('images/jobs', {
-      query: { limit, saved: saved ? '1' : undefined, view, cursor }
+      query: { limit, saved: saved ? '1' : undefined, view, cursor },
+      signal
     })
   }
 
-  cancel({ ids = [], requestIds = [] } = {}) {
+  cancel({ ids = [], requestIds = [], signal } = {}) {
     return this.json('images/cancel', {
       method: 'POST',
-      body: { ids: ids.filter(isUuid), requestIds: requestIds.filter(isUuid) }
+      body: { ids: ids.filter(isUuid), requestIds: requestIds.filter(isUuid) },
+      signal
     })
   }
 
-  wallet() {
-    return this.json('credits')
+  wallet({ signal } = {}) {
+    return this.json('credits', { signal })
   }
 
-  usage({ page = 1, pageSize = 10 } = {}) {
-    return this.json('credits/usage', { query: { page, pageSize } })
+  usage({ page = 1, pageSize = 10, signal } = {}) {
+    return this.json('credits/usage', { query: { page, pageSize }, signal })
   }
 
-  async image(id, { preferOriginal = true } = {}) {
+  async image(id, { preferOriginal = true, signal, timeout = 15000 } = {}) {
     if (!isUuid(id)) throw new ApiError('Invalid image id.', { code: 'invalid_request' })
     let lastError
     for (const original of preferOriginal ? [true, false] : [false]) {
@@ -274,10 +266,12 @@ export class ApiClient {
         response = await this.fetchResponse(`images/${id}/preview`, {
           query: original ? { original: '1' } : undefined,
           accept: 'image/png, image/jpeg, image/webp, image/gif',
-          timeout: 60000
+          timeout,
+          signal
         })
       } catch (error) {
         lastError = error
+        if (signal?.aborted) break
         continue
       }
       const mimeType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
@@ -288,7 +282,7 @@ export class ApiClient {
       }
       const { buffer, tooLarge } = await readCapped(response, MAX_IMAGE_BYTES)
       if (tooLarge) {
-        lastError = new ApiError('The image is larger than the 8 MB MCP limit.', { code: 'image_too_large' })
+        lastError = new ApiError('The image is larger than the 6 MB MCP limit.', { code: 'image_too_large' })
         continue
       }
       return {
@@ -298,6 +292,8 @@ export class ApiClient {
         original
       }
     }
+    if (signal?.aborted)
+      throw new ApiError('The call was cancelled.', { code: 'cancelled' })
     if (lastError instanceof AuthError) throw lastError
     if (lastError instanceof ApiError && lastError.code === 'not_found')
       throw new ApiError('The image is not available yet or is no longer stored.', { code: 'not_found' })

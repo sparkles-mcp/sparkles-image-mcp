@@ -107,8 +107,7 @@ export async function startFakeServer(options = {}) {
       })
     }
 
-    if (url.pathname === '/api/oauth/token' && request.method === 'POST') {
-      const form = new URLSearchParams(raw)
+    if ((url.pathname === '/api/oauth/token' || url.pathname === '/custom/token') && request.method === 'POST') {      const form = new URLSearchParams(raw)
       if (state.tokenError) return json(response, state.tokenError, 400)
       if (form.get('grant_type') === 'refresh_token') {
         if (form.get('refresh_token') !== 'r1' && form.get('refresh_token') !== 'login-refresh')
@@ -131,6 +130,8 @@ export async function startFakeServer(options = {}) {
     }
 
     if (url.pathname === '/api/oauth/revoke') {
+      if (state.revokeStatus && state.revokeStatus !== 200)
+        return json(response, { error: 'revocation_failed' }, state.revokeStatus)
       return json(response, {})
     }
 

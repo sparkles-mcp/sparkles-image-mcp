@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { accessHeaders, config, endpoints } from './config.mjs'
-import { clearCredentials, credentialsFile, loadCredentials } from './store.mjs'
+import { CLI, INSTALL_SPEC, accessHeaders, config, endpoints } from './config.mjs'
+import { credentialsFile, loadCredentials } from './store.mjs'
 import { AuthError, login, revoke } from './oauth.mjs'
 import { ApiClient } from './api.mjs'
 import { startServer } from './server.mjs'
@@ -12,19 +12,18 @@ import { startServer } from './server.mjs'
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version
 const skillSource = path.join(packageRoot, 'skills', 'sparkles-image', 'SKILL.md')
+const ACCOUNT_URL = 'https://sparkles-editor.com/account'
 
 const help = `sparkles-image-mcp ${packageVersion}
 
 Generate images with a Sparkles Editor account from any MCP client.
 
 Usage:
-  sparkles-image-mcp init [--project] [--no-login] [--force]
-  sparkles-image-mcp login
-  sparkles-image-mcp logout
-  sparkles-image-mcp serve
-  sparkles-image-mcp doctor
-  sparkles-image-mcp help
-  sparkles-image-mcp version
+  npx -y ${INSTALL_SPEC} <command> [options]
+
+Choose one install method:
+  ${CLI} init              Install the agent skill and sign in.
+  ${CLI} serve             Run the MCP server on stdio (used by MCP clients).
 
 Commands:
   init      Install the agent skill and print MCP client configuration.
@@ -32,6 +31,8 @@ Commands:
   logout    Revoke the local token and remove it from this machine.
   serve     Run the MCP server on stdio (used by MCP clients).
   doctor    Check configuration, login state, and site connectivity.
+  help      Show this help.
+  version   Print the package version.
 
 Options:
   --project    With init: install the skill in ./.claude/skills instead of ~/.claude/skills.
@@ -41,12 +42,15 @@ Options:
 Environment:
   SPARKLES_ISSUER              Site origin. Default: https://sparkles-editor.com
   SPARKLES_API_BASE            API base. Default: <issuer>/api/mcp
+  SPARKLES_RESOURCE            OAuth resource indicator. Default: <issuer>/api/mcp
+  SPARKLES_CLIENT_ID           OAuth public client id. Default: sparkles-image-mcp
+  SPARKLES_SCOPE               Requested scopes. Default: images:generate images:read account:read
   SPARKLES_CONFIG_DIR          Credential directory. Default: ~/.config/sparkles-image-mcp
   SPARKLES_ACCESS_CLIENT_ID    Cloudflare Access service token id (private deployments).
   SPARKLES_ACCESS_CLIENT_SECRET
   SPARKLES_ACCESS_COOKIE       Cloudflare Access cookie (local verification only).
 
-Run \`sparkles-image-mcp doctor\` to check the connection.
+Run \`${CLI} doctor\` to check the connection.
 `
 
 function parseArgs(argv) {
@@ -73,28 +77,39 @@ function installSkill({ project = false, force = false } = {}) {
   return { target, status: 'installed' }
 }
 
+const shellValue = (value) =>
+  /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `"${String(value).replace(/(["\\$`])/g, '\\$1')}"`
+
 function printClientConfig(cfg) {
-  const command = 'npx'
-  const args = ['-y', 'sparkles-image-mcp', 'serve']
-  const custom = cfg.issuer !== 'https://sparkles-editor.com'
-  const server = {
-    command,
-    args,
-    ...(custom ? { env: { SPARKLES_ISSUER: cfg.issuer, SPARKLES_API_BASE: cfg.apiBase } } : {})
+  const args = ['-y', INSTALL_SPEC, 'serve']
+  const env = {
+    SPARKLES_ISSUER: cfg.issuer,
+    SPARKLES_API_BASE: cfg.apiBase,
+    SPARKLES_CONFIG_DIR: cfg.configDir
   }
+  const server = { command: 'npx', args, env }
   const block = JSON.stringify({ mcpServers: { 'sparkles-image': server } }, null, 2)
+  const envFlags = Object.entries(env)
+    .map(([key, value]) => `--env ${key}=${shellValue(value)}`)
+    .join(' ')
   console.log('')
   console.log('MCP client configuration')
   console.log('')
-  console.log('Claude Code:')
-  console.log(`  claude mcp add sparkles-image -- ${command} ${args.join(' ')}`)
+  console.log('Claude Code plugin (recommended):')
+  console.log('  /plugin marketplace add sparkles-mcp/sparkles-image-mcp')
+  console.log('  /plugin install sparkles-image@sparkles-image-mcp')
+  console.log('')
+  console.log('Claude Code without the plugin:')
+  console.log(`  claude mcp add --scope user ${envFlags} sparkles-image -- npx ${args.join(' ')}`)
   console.log('')
   console.log('Claude Desktop / Cursor (mcpServers block):')
   console.log(block)
-  if (custom) {
-    console.log('')
-    console.log(`This installation uses ${cfg.issuer}. Keep SPARKLES_ISSUER and SPARKLES_API_BASE in the server environment.`)
-    console.log('If the site uses Cloudflare Access, also set SPARKLES_ACCESS_CLIENT_ID and SPARKLES_ACCESS_CLIENT_SECRET.')
+  console.log('')
+  console.log(`Keep SPARKLES_CONFIG_DIR in the server environment so login and serve use the same credentials (${cfg.configDir}).`)
+  console.log('Use either the plugin or the manual MCP entry, not both: they share the server name `sparkles-image`.')
+  if (cfg.accessClientId || cfg.accessCookie) {
+    console.log('This installation also needs its Cloudflare Access variables in the server environment.')
+    console.log('Add SPARKLES_ACCESS_CLIENT_ID and SPARKLES_ACCESS_CLIENT_SECRET (or SPARKLES_ACCESS_COOKIE) without printing them here.')
   }
 }
 
@@ -114,7 +129,7 @@ async function commandInit(cfg, flags) {
     await commandLogin(cfg)
   } else {
     console.log('')
-    console.log('Run `npx sparkles-image-mcp login` when you are ready to sign in.')
+    console.log(`Run \`${CLI} login\` when you are ready to sign in.`)
   }
 }
 
@@ -122,13 +137,19 @@ async function commandLogin(cfg) {
   const credentials = await login(cfg)
   console.log(`Signed in. Scope: ${credentials.scope}`)
   console.log(`Access token expires at ${new Date(credentials.expiresAt).toISOString()}.`)
+  console.log(`Generated images also appear in your site library: ${cfg.issuer}/library?view=artwork`)
 }
 
 async function commandLogout(cfg) {
   const credentials = loadCredentials(cfg)
-  await revoke(cfg, credentials)
-  clearCredentials(cfg)
-  console.log('Signed out and removed local credentials.')
+  const result = await revoke(cfg, credentials)
+  if (result.revoked) {
+    console.log('Signed out and removed local credentials. The site grant was revoked.')
+  } else {
+    console.log('Removed local credentials, but the site did not confirm revocation.')
+    if (result.error) console.log(`Reason: ${result.error}`)
+    console.log(`Revoke the grant at ${ACCOUNT_URL} if this device may have been copied.`)
+  }
 }
 
 async function commandDoctor(cfg) {
@@ -140,7 +161,7 @@ async function commandDoctor(cfg) {
   if (cfg.accessClientId && cfg.accessClientSecret) console.log('Cloudflare Access service token: configured')
   else if (cfg.accessCookie) console.log('Cloudflare Access cookie: configured')
   if (!credentials?.refreshToken && !credentials?.accessToken) {
-    console.log('Login: not signed in. Run `sparkles-image-mcp login`.')
+    console.log(`Login: not signed in. Run \`${CLI} login\`.`)
     return 1
   }
   console.log(`Login: ${credentials.refreshToken ? 'refresh token stored' : 'access token only'}`)
@@ -157,7 +178,7 @@ async function commandDoctor(cfg) {
   try {
     const catalog = await client.catalog()
     const models = [...new Set((catalog?.prices || []).map((price) => price.model))]
-    console.log(`Image service: ${catalog?.ready ? 'ready' : 'not ready'} (${models.length} model(s), provider: ${catalog?.provider || 'unknown'})`)
+    console.log(`Image service: ${catalog?.ready ? 'ready' : 'not ready'} (${models.length} model(s))`)
   } catch (error) {
     console.log(`Image service: FAILED — ${error.message}`)
     return 1

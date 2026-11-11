@@ -45,7 +45,7 @@ test('init installs the skill into a project without logging in', () => {
     assert.ok(fs.existsSync(skill))
     assert.match(fs.readFileSync(skill, 'utf8'), /^name: sparkles-image$/m)
     assert.match(result, /MCP client configuration/)
-    assert.match(result, /claude mcp add sparkles-image/)
+    assert.match(result, /claude mcp add .*sparkles-image --/)
   } finally {
     fs.rmSync(project, { recursive: true, force: true })
     fs.rmSync(configDir, { recursive: true, force: true })
@@ -79,6 +79,8 @@ test('doctor checks authentication and the image service against a fake server',
   try {
     fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({
       version: 1,
+      issuer: server.origin,
+      clientId: 'sparkles-image-mcp',
       accessToken: 'token-1',
       refreshToken: 'r1',
       expiresAt: Date.now() + 3600_000,

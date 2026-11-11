@@ -20,6 +20,8 @@ test('the stdio MCP server lists tools and generates an image end to end', async
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparkles-mcp-e2e-'))
   fs.writeFileSync(path.join(configDir, 'credentials.json'), JSON.stringify({
     version: 1,
+    issuer: server.origin,
+    clientId: 'sparkles-image-mcp',
     accessToken: 'token-1',
     refreshToken: 'r1',
     expiresAt: Date.now() + 3600_000,

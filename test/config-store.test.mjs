@@ -51,6 +51,8 @@ test('credentials are written with owner-only permissions and can be cleared', (
   const cfg = config({ SPARKLES_CONFIG_DIR: directory })
   saveCredentials(cfg, {
     version: 1,
+    issuer: cfg.issuer,
+    clientId: cfg.clientId,
     accessToken: 'access',
     refreshToken: 'refresh',
     expiresAt: 123456,
@@ -73,6 +75,25 @@ test('invalid credential files are ignored', () => {
   assert.equal(loadCredentials(cfg), null)
   fs.writeFileSync(credentialsFile(cfg), 'not json')
   assert.equal(loadCredentials(cfg), null)
+  fs.rmSync(directory, { recursive: true, force: true })
+})
+
+test('credentials are bound to the issuer and OAuth client that issued them', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sparkles-store-'))
+  const production = config({ SPARKLES_CONFIG_DIR: directory })
+  const staging = config({ SPARKLES_ISSUER: 'https://staging.example.test', SPARKLES_CONFIG_DIR: directory })
+  saveCredentials(production, {
+    version: 1,
+    issuer: production.issuer,
+    clientId: production.clientId,
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    expiresAt: Date.now() + 3600_000,
+    scope: 'images:read'
+  })
+  assert.equal(loadCredentials(production).accessToken, 'access')
+  assert.equal(loadCredentials(staging), null)
+  assert.equal(loadCredentials(config({ SPARKLES_CONFIG_DIR: directory, SPARKLES_CLIENT_ID: 'another-client' })), null)
   fs.rmSync(directory, { recursive: true, force: true })
 })
 

@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
-    "zod": "3.25.76"
+    "zod": "4.6.7"
   },
   "keywords": [
     "mcp",
@@ -31,5 +31,13 @@
     "image-generation",
     "sparkles"
   ],
+  "homepage": "https://sparkles-editor.com/mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sparkles-mcp/sparkles-image-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sparkles-mcp/sparkles-image-mcp/issues"
+  },
   "license": "MIT"
 }

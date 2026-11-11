@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "sparkles-image": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/src/cli.mjs", "serve"]
+      "command": "npx",
+      "args": ["-y", "github:sparkles-mcp/sparkles-image-mcp", "serve"]
     }
   }
 }

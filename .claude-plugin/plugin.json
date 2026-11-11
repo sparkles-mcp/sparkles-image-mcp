@@ -6,6 +6,7 @@
     "name": "Sparkles Editor contributors"
   },
   "license": "MIT",
+  "icon": "./.claude-plugin/icon.png",
   "keywords": [
     "mcp",
     "model-context-protocol",

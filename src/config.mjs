@@ -4,6 +4,11 @@ import path from 'node:path'
 export const DEFAULT_ISSUER = 'https://sparkles-editor.com'
 export const DEFAULT_CLIENT_ID = 'sparkles-image-mcp'
 export const DEFAULT_SCOPE = 'images:generate images:read account:read'
+// The package is distributed from the public GitHub repository. Keep every
+// user-facing command on this one spec so it cannot drift back to a stale npm
+// package name.
+export const INSTALL_SPEC = 'github:sparkles-mcp/sparkles-image-mcp'
+export const CLI = `npx -y ${INSTALL_SPEC}`
 
 const trim = (value) => String(value || '').replace(/\/+$/, '')
 
