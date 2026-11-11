@@ -25,7 +25,7 @@ Call `generate_image` with a complete visual prompt. Preserve the user's intent,
 - Do not add text to an image unless the user asks for it; image models often misspell text.
 - Never put passwords, API keys, private URLs, or other secrets in a prompt.
 
-`generate_image` waits up to about 45 seconds. If it returns `pending: true`, the job is still running: call `get_image` with the job id after a short wait instead of submitting the same prompt again. Reuse the same `request_id` only when retrying the identical request after a network error.
+`generate_image` waits 25 seconds by default (maximum 30). If it returns `pending: true`, the job is still running: call `get_image` with the job id after a short wait instead of submitting the same prompt again. Reuse the same `request_id` only when retrying the identical request after a network error.
 
 ## Showing results
 

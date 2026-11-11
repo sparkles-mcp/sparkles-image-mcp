@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { timeoutSignal } from './abort.mjs'
 import { CLI, accessHeaders } from './config.mjs'
 import { AuthError, currentAccessToken } from './oauth.mjs'
 import { readCapped } from './read.mjs'
@@ -27,11 +28,6 @@ export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]
 export const isUuid = (value) => typeof value === 'string' && UUID_PATTERN.test(value)
 
 export const newRequestId = () => crypto.randomUUID()
-
-const timeoutSignal = (signal, timeout) => {
-  const timer = AbortSignal.timeout(timeout)
-  return signal ? AbortSignal.any([signal, timer]) : timer
-}
 
 async function errorMessage(response) {
   try {

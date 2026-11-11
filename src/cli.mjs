@@ -5,14 +5,14 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { CLI, INSTALL_SPEC, accessHeaders, config, endpoints } from './config.mjs'
 import { credentialsFile, loadCredentials } from './store.mjs'
-import { AuthError, login, revoke } from './oauth.mjs'
+import { login, revoke } from './oauth.mjs'
 import { ApiClient } from './api.mjs'
 import { startServer } from './server.mjs'
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version
 const skillSource = path.join(packageRoot, 'skills', 'sparkles-image', 'SKILL.md')
-const ACCOUNT_URL = 'https://sparkles-editor.com/account'
+const accountUrl = (cfg) => `${cfg.issuer}/account`
 
 const help = `sparkles-image-mcp ${packageVersion}
 
@@ -46,6 +46,7 @@ Environment:
   SPARKLES_CLIENT_ID           OAuth public client id. Default: sparkles-image-mcp
   SPARKLES_SCOPE               Requested scopes. Default: images:generate images:read account:read
   SPARKLES_CONFIG_DIR          Credential directory. Default: ~/.config/sparkles-image-mcp
+  SPARKLES_ALLOW_CROSS_ORIGIN  Set to 1 only when a staging API lives on another origin.
   SPARKLES_ACCESS_CLIENT_ID    Cloudflare Access service token id (private deployments).
   SPARKLES_ACCESS_CLIENT_SECRET
   SPARKLES_ACCESS_COOKIE       Cloudflare Access cookie (local verification only).
@@ -85,6 +86,9 @@ function printClientConfig(cfg) {
   const env = {
     SPARKLES_ISSUER: cfg.issuer,
     SPARKLES_API_BASE: cfg.apiBase,
+    SPARKLES_RESOURCE: cfg.resource,
+    SPARKLES_CLIENT_ID: cfg.clientId,
+    SPARKLES_SCOPE: cfg.scope,
     SPARKLES_CONFIG_DIR: cfg.configDir
   }
   const server = { command: 'npx', args, env }
@@ -148,7 +152,7 @@ async function commandLogout(cfg) {
   } else {
     console.log('Removed local credentials, but the site did not confirm revocation.')
     if (result.error) console.log(`Reason: ${result.error}`)
-    console.log(`Revoke the grant at ${ACCOUNT_URL} if this device may have been copied.`)
+    console.log(`Revoke the grant at ${accountUrl(cfg)} if this device may have been copied.`)
   }
 }
 
@@ -173,7 +177,7 @@ async function commandDoctor(cfg) {
     console.log(`Authentication: OK (balance ${wallet?.balance ?? 'unknown'})`)
   } catch (error) {
     console.log(`Authentication: FAILED — ${error.message}`)
-    if (error instanceof AuthError) return 1
+    return 1
   }
   try {
     const catalog = await client.catalog()
@@ -205,11 +209,12 @@ async function main() {
     console.log(help)
     return 0
   }
+  if (command === 'version') {
+    console.log(packageVersion)
+    return 0
+  }
   const cfg = config()
   switch (command) {
-    case 'version':
-      console.log(packageVersion)
-      return 0
     case 'init':
       await commandInit(cfg, flags)
       return 0

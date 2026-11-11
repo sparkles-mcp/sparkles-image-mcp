@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { AuthError, OAuthError, currentAccessToken, discover, login, refresh, revoke, startCallbackServer } from '../src/oauth.mjs'
+import { AuthError, OAuthError, currentAccessToken, discover, login, openUrl, refresh, revoke, startCallbackServer } from '../src/oauth.mjs'
 import { config } from '../src/config.mjs'
 import { credentialsFile, loadCredentials, saveCredentials } from '../src/store.mjs'
 import { startFakeServer } from './helpers.mjs'
@@ -350,4 +351,53 @@ test('revoke clears local credentials even when the site is unreachable', async 
   await revoke(cfg, credentials)
   assert.equal(fs.existsSync(credentialsFile(cfg)), false)
   fs.rmSync(directory, { recursive: true, force: true })
+})
+
+function fakeChild() {
+  const child = new EventEmitter()
+  child.unref = () => {}
+  return child
+}
+
+test('openUrl treats a nonzero browser exit as failure', async () => {
+  const child = fakeChild()
+  const result = openUrl('https://example.test/authorize', {
+    platform: 'linux',
+    spawnImpl: () => child,
+    launchTimeout: 50
+  })
+  child.emit('exit', 1)
+  assert.equal(await result, false)
+})
+
+test('openUrl treats a zero browser exit as success', async () => {
+  const child = fakeChild()
+  const result = openUrl('https://example.test/authorize', {
+    platform: 'darwin',
+    spawnImpl: () => child,
+    launchTimeout: 50
+  })
+  child.emit('exit', 0)
+  assert.equal(await result, true)
+})
+
+test('openUrl keeps the URL fallback when the browser cannot start', async () => {
+  const child = fakeChild()
+  const result = openUrl('https://example.test/authorize', {
+    platform: 'win32',
+    spawnImpl: () => child,
+    launchTimeout: 50
+  })
+  child.emit('error', new Error('not found'))
+  assert.equal(await result, false)
+})
+
+test('openUrl assumes success when the launcher stays running', async () => {
+  const child = fakeChild()
+  const result = openUrl('https://example.test/authorize', {
+    platform: 'linux',
+    spawnImpl: () => child,
+    launchTimeout: 10
+  })
+  assert.equal(await result, true)
 })

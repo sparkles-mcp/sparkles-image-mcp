@@ -12,12 +12,37 @@ export const CLI = `npx -y ${INSTALL_SPEC}`
 
 const trim = (value) => String(value || '').replace(/\/+$/, '')
 
+const isLoopback = (hostname) =>
+  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+
+function absoluteOrigin(value, label) {
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error(`${label} must be an absolute URL.`)
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:')
+    throw new Error(`${label} must use HTTPS.`)
+  if (url.protocol !== 'https:' && !isLoopback(url.hostname))
+    throw new Error(`${label} must use HTTPS unless it points at localhost.`)
+  return url
+}
+
 export function config(env = process.env) {
   const issuer = trim(env.SPARKLES_ISSUER || DEFAULT_ISSUER)
   const defaultBase = `${issuer}/api/mcp`
+  const apiBase = trim(env.SPARKLES_API_BASE || defaultBase)
+  const issuerUrl = absoluteOrigin(issuer, 'SPARKLES_ISSUER')
+  const apiUrl = absoluteOrigin(apiBase, 'SPARKLES_API_BASE')
+  // Credentials and Cloudflare Access secrets are sent to apiBase. Never let a
+  // stray environment override forward them to another origin; staging tests
+  // that deliberately target a separate Core host must opt in explicitly.
+  if (apiUrl.origin !== issuerUrl.origin && env.SPARKLES_ALLOW_CROSS_ORIGIN !== '1')
+    throw new Error('SPARKLES_API_BASE must share the SPARKLES_ISSUER origin. Set SPARKLES_ALLOW_CROSS_ORIGIN=1 only for isolated staging tests.')
   return {
     issuer,
-    apiBase: trim(env.SPARKLES_API_BASE || defaultBase),
+    apiBase,
     resource: trim(env.SPARKLES_RESOURCE || defaultBase),
     clientId: env.SPARKLES_CLIENT_ID || DEFAULT_CLIENT_ID,
     scope: env.SPARKLES_SCOPE || DEFAULT_SCOPE,

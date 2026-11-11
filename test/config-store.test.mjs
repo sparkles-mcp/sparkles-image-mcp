@@ -23,6 +23,7 @@ test('config accepts a staging override and strips trailing slashes', () => {
   const cfg = config({
     SPARKLES_ISSUER: 'https://t-d.example.com/',
     SPARKLES_API_BASE: 'https://core-t-d.example.com/api/',
+    SPARKLES_ALLOW_CROSS_ORIGIN: '1',
     SPARKLES_CONFIG_DIR: '/tmp/sparkles-test',
     SPARKLES_SCOPE: 'images:generate'
   })
@@ -31,6 +32,23 @@ test('config accepts a staging override and strips trailing slashes', () => {
   assert.equal(cfg.resource, 'https://t-d.example.com/api/mcp')
   assert.equal(cfg.configDir, '/tmp/sparkles-test')
   assert.equal(cfg.scope, 'images:generate')
+})
+
+test('config refuses to send credentials to another origin', () => {
+  assert.throws(() => config({
+    SPARKLES_ISSUER: 'https://sparkles-editor.com',
+    SPARKLES_API_BASE: 'https://attacker.example/api/mcp',
+    SPARKLES_CONFIG_DIR: '/tmp/sparkles-test'
+  }), /SPARKLES_API_BASE must share the SPARKLES_ISSUER origin/)
+  assert.throws(() => config({
+    SPARKLES_ISSUER: 'http://sparkles-editor.com',
+    SPARKLES_CONFIG_DIR: '/tmp/sparkles-test'
+  }), /must use HTTPS unless it points at localhost/)
+  const local = config({
+    SPARKLES_ISSUER: 'http://127.0.0.1:8787',
+    SPARKLES_CONFIG_DIR: '/tmp/sparkles-test'
+  })
+  assert.equal(local.apiBase, 'http://127.0.0.1:8787/api/mcp')
 })
 
 test('accessHeaders never invents credentials and prefixes a raw cookie', () => {

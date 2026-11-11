@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { timeoutSignal } from './abort.mjs'
 import { CLI, accessHeaders, endpoints } from './config.mjs'
 import { clearCredentials, loadCredentials, saveCredentials, withCredentialsLock } from './store.mjs'
 import { readCapped } from './read.mjs'
@@ -25,8 +26,7 @@ const redirectStatuses = new Set([301, 302, 303, 307, 308])
 const MAX_OAUTH_BYTES = 512 * 1024
 
 async function siteFetch(cfg, url, options = {}, timeout = 15000) {
-  const timer = AbortSignal.timeout(timeout)
-  const signal = options.signal ? AbortSignal.any([options.signal, timer]) : timer
+  const signal = timeoutSignal(options.signal, timeout)
   const response = await fetch(url, {
     ...options,
     redirect: 'manual',
@@ -203,33 +203,43 @@ export function startCallbackServer(state, { issuer, requireIssuer = false, sign
   })
 }
 
-export function openUrl(url) {
-  const [command, args] = process.platform === 'darwin'
+export function openUrl(url, { spawnImpl = spawn, platform = process.platform, launchTimeout = 800 } = {}) {
+  const [command, args] = platform === 'darwin'
     ? ['open', [url]]
-    : process.platform === 'win32'
+    : platform === 'win32'
       // Avoid cmd.exe, which reparses '&' in the authorization URL.
       ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
       : ['xdg-open', [url]]
   return new Promise((resolve) => {
     let child
+    let settled = false
+    let timer
+    const finish = (opened) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(opened)
+    }
     try {
-      child = spawn(command, args, { stdio: 'ignore', detached: true })
+      child = spawnImpl(command, args, { stdio: 'ignore', detached: true })
     } catch {
       resolve(false)
       return
     }
-    let settled = false
-    child.once('error', () => {
+    // A browser command that returns nonzero never opened the page, so login
+    // must print the URL instead of waiting for a callback that cannot arrive.
+    child.once('error', () => finish(false))
+    child.once('exit', (code) => finish(code === 0))
+    // Some launchers stay in the foreground after handing off to the browser.
+    // Treat a still-running child as success, but only after a short grace.
+    timer = setTimeout(() => {
       if (settled) return
-      settled = true
-      resolve(false)
-    })
-    child.once('spawn', () => {
-      if (settled) return
-      settled = true
-      child.unref()
-      resolve(true)
-    })
+      try {
+        child.unref()
+      } catch { /* noop */ }
+      finish(true)
+    }, launchTimeout)
+    timer.unref?.()
   })
 }
 

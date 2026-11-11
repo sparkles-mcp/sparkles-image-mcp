@@ -1,6 +1,6 @@
 {
   "name": "sparkles-image-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open-source Model Context Protocol server for generating images with a Sparkles Editor account.",
   "type": "module",
   "bin": {

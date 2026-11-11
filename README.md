@@ -57,6 +57,9 @@ Claude Code:
 claude mcp add --scope user \
   --env SPARKLES_ISSUER=https://sparkles-editor.com \
   --env SPARKLES_API_BASE=https://sparkles-editor.com/api/mcp \
+  --env SPARKLES_RESOURCE=https://sparkles-editor.com/api/mcp \
+  --env SPARKLES_CLIENT_ID=sparkles-image-mcp \
+  --env SPARKLES_SCOPE="images:generate images:read account:read" \
   --env SPARKLES_CONFIG_DIR="$HOME/.config/sparkles-image-mcp" \
   sparkles-image -- npx -y github:sparkles-mcp/sparkles-image-mcp serve
 ```
@@ -72,6 +75,9 @@ Claude Desktop / Cursor (JSON):
       "env": {
         "SPARKLES_ISSUER": "https://sparkles-editor.com",
         "SPARKLES_API_BASE": "https://sparkles-editor.com/api/mcp",
+        "SPARKLES_RESOURCE": "https://sparkles-editor.com/api/mcp",
+        "SPARKLES_CLIENT_ID": "sparkles-image-mcp",
+        "SPARKLES_SCOPE": "images:generate images:read account:read",
         "SPARKLES_CONFIG_DIR": "/home/you/.config/sparkles-image-mcp"
       }
     }
@@ -80,6 +86,8 @@ Claude Desktop / Cursor (JSON):
 ```
 
 Do not install the plugin and a manual entry named `sparkles-image` at the same time. They would start two servers with the same name.
+
+`init` prints all resolved settings, including the client id, resource indicator, and scopes. The Claude Code plugin uses the production defaults; if you change the issuer or OAuth client, use the manual configuration and give `login` and `serve` the same environment.
 
 ### CLI setup helper
 
@@ -251,8 +259,9 @@ The plugin does not generate extra test images, bypass rate limits, or call the 
 | `SPARKLES_API_BASE` | `<issuer>/api/mcp` | Public MCP API base. |
 | `SPARKLES_RESOURCE` | `<issuer>/api/mcp` | OAuth resource indicator. |
 | `SPARKLES_CLIENT_ID` | `sparkles-image-mcp` | Pre-registered public OAuth client id. |
-| `SPARKLES_SCOPE` | `images:generate images:read account:read` | Space-separated scopes to request. Reducing scopes also disables the matching tools. |
+| `SPARKLES_SCOPE` | `images:generate images:read account:read` | Space-separated scopes to request. The server enforces the grant; a call outside it fails with `insufficient_scope`. |
 | `SPARKLES_CONFIG_DIR` | `~/.config/sparkles-image-mcp` | Credential directory. Must be the same for `login` and `serve`. |
+| `SPARKLES_ALLOW_CROSS_ORIGIN` | — | Set to `1` only for an isolated staging API on a different origin. Production must keep the API on the issuer origin. |
 | `SPARKLES_ACCESS_CLIENT_ID` | — | Cloudflare Access service token id, for private deployments. |
 | `SPARKLES_ACCESS_CLIENT_SECRET` | — | Cloudflare Access service token secret. |
 | `SPARKLES_ACCESS_COOKIE` | — | Cloudflare Access cookie for local verification only. Never commit it. |
