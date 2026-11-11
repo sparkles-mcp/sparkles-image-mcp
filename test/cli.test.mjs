@@ -152,3 +152,25 @@ test('init keeps custom client, resource, and scope settings in the client confi
     fs.rmSync(configDir, { recursive: true, force: true })
   }
 })
+
+test('init keeps the staging cross-origin opt-in in the client config', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sparkles-init-'))
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sparkles-init-cfg-'))
+  try {
+    const result = execFileSync(process.execPath, [cli, 'init', '--project', '--no-login'], {
+      cwd: project,
+      env: {
+        ...process.env,
+        SPARKLES_ISSUER: 'https://t-d.example.com',
+        SPARKLES_API_BASE: 'https://core-t-d.example.com/api',
+        SPARKLES_ALLOW_CROSS_ORIGIN: '1',
+        SPARKLES_CONFIG_DIR: configDir
+      }
+    }).toString()
+    assert.match(result, /SPARKLES_ALLOW_CROSS_ORIGIN=1/)
+    assert.match(result, /"SPARKLES_ALLOW_CROSS_ORIGIN": "1"/)
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true })
+    fs.rmSync(configDir, { recursive: true, force: true })
+  }
+})

@@ -91,6 +91,7 @@ function printClientConfig(cfg) {
     SPARKLES_SCOPE: cfg.scope,
     SPARKLES_CONFIG_DIR: cfg.configDir
   }
+  if (cfg.allowCrossOrigin) env.SPARKLES_ALLOW_CROSS_ORIGIN = '1'
   const server = { command: 'npx', args, env }
   const block = JSON.stringify({ mcpServers: { 'sparkles-image': server } }, null, 2)
   const envFlags = Object.entries(env)

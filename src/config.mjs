@@ -46,6 +46,7 @@ export function config(env = process.env) {
     resource: trim(env.SPARKLES_RESOURCE || defaultBase),
     clientId: env.SPARKLES_CLIENT_ID || DEFAULT_CLIENT_ID,
     scope: env.SPARKLES_SCOPE || DEFAULT_SCOPE,
+    allowCrossOrigin: env.SPARKLES_ALLOW_CROSS_ORIGIN === '1',
     configDir: env.SPARKLES_CONFIG_DIR
       || path.join(env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'sparkles-image-mcp'),
     accessClientId: env.SPARKLES_ACCESS_CLIENT_ID || '',
