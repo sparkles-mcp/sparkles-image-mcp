@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.check.json",
+  "compilerOptions": {
+    "checkJs": false,
+    "strict": true
+  },
+  "include": [
+    "src/config.mjs"
+  ]
+}

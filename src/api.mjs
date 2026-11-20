@@ -52,7 +52,9 @@ export class ApiClient {
     this.refreshInFlight = null
   }
 
-  async token(force = false, { signal } = {}) {
+  /** @param {{ signal?: AbortSignal }} [options] */
+  async token(force = false, options = {}) {
+    const { signal } = options
     const valid = this.credentials.accessToken && this.credentials.expiresAt > Date.now() + 60_000
     if (!force && valid) return this.credentials.accessToken
     // Refresh tokens rotate. Concurrent tool calls must share one refresh or
@@ -77,7 +79,9 @@ export class ApiClient {
     return url
   }
 
-  async fetchResponse(path, {
+  /** @param {{method?: string, query?: Record<string, string | number | boolean>, body?: unknown, accept?: string, timeout?: number, retry?: boolean, signal?: AbortSignal}} [options] */
+  async fetchResponse(path, options = {}) {
+    const {
     method = 'GET',
     query,
     body,
@@ -85,7 +89,7 @@ export class ApiClient {
     timeout = 30000,
     retry = true,
     signal
-  } = {}) {
+  } = options
     const url = this.url(path, query)
     const headers = {
       Accept: accept,
@@ -162,11 +166,15 @@ export class ApiClient {
     }
   }
 
-  catalog({ signal } = {}) {
+  /** @param {{ signal?: AbortSignal }} [options] */
+  catalog(options = {}) {
+    const { signal } = options
     return this.json('images/catalog', { signal })
   }
 
-  async generate(input, { signal } = {}) {
+  /** @param {{ signal?: AbortSignal }} [options] */
+  async generate(input, options = {}) {
+    const { signal } = options
     signal?.throwIfAborted()
     const catalog = await this.catalog({ signal })
     if (!catalog?.ready) throw new ApiError('Image generation is not available right now.', { code: 'unavailable' })
@@ -215,12 +223,16 @@ export class ApiClient {
     }
   }
 
-  job(id, { signal } = {}) {
+  /** @param {{ signal?: AbortSignal }} [options] */
+  job(id, options = {}) {
+    const { signal } = options
     if (!isUuid(id)) throw new ApiError('Invalid image job id.', { code: 'invalid_request' })
     return this.json(`images/jobs/${id}`, { signal })
   }
 
-  async statuses(ids, { signal } = {}) {
+  /** @param {{ signal?: AbortSignal }} [options] */
+  async statuses(ids, options = {}) {
+    const { signal } = options
     const unique = [...new Set(ids)].filter(isUuid)
     if (!unique.length) throw new ApiError('No valid image job ids were provided.', { code: 'invalid_request' })
     return this.json('images/jobs/status', {
@@ -230,14 +242,18 @@ export class ApiClient {
     })
   }
 
-  listJobs({ limit = 20, saved = false, view = 'all', cursor, signal } = {}) {
+  /** @param {{limit?: number, saved?: boolean, view?: string, cursor?: string, signal?: AbortSignal}} [options] */
+  listJobs(options = {}) {
+    const { limit = 20, saved = false, view = 'all', cursor, signal } = options
     return this.json('images/jobs', {
       query: { limit, saved: saved ? '1' : undefined, view, cursor },
       signal
     })
   }
 
-  cancel({ ids = [], requestIds = [], signal } = {}) {
+  /** @param {{ids?: string[], requestIds?: string[], signal?: AbortSignal}} [options] */
+  cancel(options = {}) {
+    const { ids = [], requestIds = [], signal } = options
     return this.json('images/cancel', {
       method: 'POST',
       body: { ids: ids.filter(isUuid), requestIds: requestIds.filter(isUuid) },
@@ -245,15 +261,21 @@ export class ApiClient {
     })
   }
 
-  wallet({ signal } = {}) {
+  /** @param {{ signal?: AbortSignal }} [options] */
+  wallet(options = {}) {
+    const { signal } = options
     return this.json('credits', { signal })
   }
 
-  usage({ page = 1, pageSize = 10, signal } = {}) {
+  /** @param {{page?: number, pageSize?: number, signal?: AbortSignal}} [options] */
+  usage(options = {}) {
+    const { page = 1, pageSize = 10, signal } = options
     return this.json('credits/usage', { query: { page, pageSize }, signal })
   }
 
-  async image(id, { preferOriginal = true, signal, timeout = 15000 } = {}) {
+  /** @param {{preferOriginal?: boolean, timeout?: number, signal?: AbortSignal}} [options] */
+  async image(id, options = {}) {
+    const { preferOriginal = true, signal, timeout = 15000 } = options
     if (!isUuid(id)) throw new ApiError('Invalid image id.', { code: 'invalid_request' })
     let lastError
     for (const original of preferOriginal ? [true, false] : [false]) {

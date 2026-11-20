@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "noEmit": true,
-    "strict": true,
+    "strict": false,
     "skipLibCheck": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
@@ -13,6 +13,6 @@
     ]
   },
   "include": [
-    "src/config.mjs"
+    "src/**/*.mjs"
   ]
 }

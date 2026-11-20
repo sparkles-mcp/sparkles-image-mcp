@@ -52,7 +52,9 @@ export function pkce() {
 
 export const randomState = () => crypto.randomBytes(32).toString('base64url')
 
-export async function discover(cfg, { signal } = {}) {
+/** @param {{ signal?: AbortSignal }} [options] */
+export async function discover(cfg, options = {}) {
+  const { signal } = options
   const fallback = {
     issuer: cfg.issuer,
     authorization_endpoint: endpoints(cfg).authorization,
@@ -93,7 +95,9 @@ export async function discover(cfg, { signal } = {}) {
   return { ...fallback, ...data }
 }
 
-export function startCallbackServer(state, { issuer, requireIssuer = false, signal } = {}) {
+/** @param {{issuer?: string, requireIssuer?: boolean, signal?: AbortSignal}} [options] */
+export function startCallbackServer(state, options = {}) {
+  const { issuer, requireIssuer = false, signal } = options
   return new Promise((resolve, reject) => {
     let settled = false
     let timer
@@ -243,7 +247,9 @@ export function openUrl(url, { spawnImpl = spawn, platform = process.platform, l
   })
 }
 
-async function postToken(cfg, body, { signal, metadata } = {}) {
+/** @param {{signal?: AbortSignal, metadata?: {token_endpoint?: string}}} [options] */
+async function postToken(cfg, body, options = {}) {
+  const { signal, metadata } = options
   const endpoint = metadata?.token_endpoint || endpoints(cfg).token
   const response = await siteFetch(cfg, endpoint, {
     method: 'POST',
@@ -286,7 +292,9 @@ const credentialsFrom = (cfg, data, previous = {}, metadata) => ({
   revocationEndpoint: metadata?.revocation_endpoint || previous.revocationEndpoint
 })
 
-export async function login(cfg, { openBrowser = true, log = console.log, signal } = {}) {
+/** @param {{openBrowser?: boolean, log?: (message: string) => void, signal?: AbortSignal}} [options] */
+export async function login(cfg, options = {}) {
+  const { openBrowser = true, log = console.log, signal } = options
   const metadata = await discover(cfg, { signal })
   const { verifier, challenge } = pkce()
   const state = randomState()
@@ -327,7 +335,9 @@ export async function login(cfg, { openBrowser = true, log = console.log, signal
   }
 }
 
-export async function refresh(cfg, credentials, { signal } = {}) {
+/** @param {{ signal?: AbortSignal }} [options] */
+export async function refresh(cfg, credentials, options = {}) {
+  const { signal } = options
   if (!credentials.refreshToken)
     throw new AuthError(`Login required. Run \`${CLI} login\`.`, 'login_required')
   return withCredentialsLock(cfg, async () => {
@@ -360,13 +370,17 @@ export async function refresh(cfg, credentials, { signal } = {}) {
   })
 }
 
-export async function currentAccessToken(cfg, credentials, { force = false, signal } = {}) {
+/** @param {{force?: boolean, signal?: AbortSignal}} [options] */
+export async function currentAccessToken(cfg, credentials, options = {}) {
+  const { force = false, signal } = options
   if (!force && credentials.accessToken && credentials.expiresAt > Date.now() + 60_000)
     return credentials
   return refresh(cfg, credentials, { signal })
 }
 
-export async function revoke(cfg, credentials, { signal } = {}) {
+/** @param {{ signal?: AbortSignal }} [options] */
+export async function revoke(cfg, credentials, options = {}) {
+  const { signal } = options
   let revoked = false
   let error
   const token = credentials?.refreshToken || credentials?.accessToken

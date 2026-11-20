@@ -19,7 +19,7 @@
   },
   "scripts": {
     "start": "node src/cli.mjs serve",
-    "typecheck": "tsc --project tsconfig.check.json",
+    "typecheck": "tsc --project tsconfig.check.json && tsc --project tsconfig.strict.json",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
