@@ -1,3 +1,4 @@
+// @ts-check
 import os from 'node:os'
 import path from 'node:path'
 
@@ -10,11 +11,14 @@ export const DEFAULT_SCOPE = 'images:generate images:read account:read'
 export const INSTALL_SPEC = 'github:sparkles-mcp/sparkles-image-mcp'
 export const CLI = `npx -y ${INSTALL_SPEC}`
 
+/** @param {string} value */
 const trim = (value) => String(value || '').replace(/\/+$/, '')
 
+/** @param {string} hostname */
 const isLoopback = (hostname) =>
   hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
 
+/** @param {string} value @param {string} label */
 function absoluteOrigin(value, label) {
   let url
   try {
@@ -57,9 +61,11 @@ export function config(env = process.env) {
 
 /**
  * Optional Cloudflare Access headers for private/staging deployments.
+ * @param {ReturnType<typeof config>} cfg
  * The cookie form is for local verification only and is never printed.
  */
 export function accessHeaders(cfg) {
+  /** @type {Record<string, string>} */
   const headers = {}
   if (cfg.accessClientId && cfg.accessClientSecret) {
     headers['CF-Access-Client-Id'] = cfg.accessClientId
@@ -73,6 +79,7 @@ export function accessHeaders(cfg) {
   return headers
 }
 
+/** @param {ReturnType<typeof config>} cfg */
 export function endpoints(cfg) {
   return {
     authorization: `${cfg.issuer}/oauth/authorize`,

@@ -19,6 +19,7 @@
   },
   "scripts": {
     "start": "node src/cli.mjs serve",
+    "typecheck": "tsc --project tsconfig.check.json",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -39,5 +40,9 @@
   "bugs": {
     "url": "https://github.com/sparkles-mcp/sparkles-image-mcp/issues"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
 }
